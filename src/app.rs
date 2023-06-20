@@ -10,21 +10,17 @@ use egui::{text_edit, Button, Ui, TextStyle, Widget};
 #[serde(default)]
 pub struct TimerApp {
     #[serde(skip)]
-    timer_data: Option<Arc<Mutex<TimerData>>>,
+    timer_data: TimerData,
     color_scheme: AppColorScheme,
-}
-
-pub struct PomoTimer{
-    time_data: Arc<Mutex<TimerData>>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct TimerData{
-    current_left: Duration,
     #[serde(skip)]
     timer_state: TimerState,
-    total_time: Duration,
+    #[serde(skip)]
+    work_time: WorkTimes, 
 }
 
 #[derive(PartialEq, Eq)]
@@ -32,6 +28,13 @@ pub enum TimerState{
     Started (Instant),
     Paused (Duration),
     Done,
+}
+
+#[derive(PartialEq, Eq)]
+enum WorkTimes {
+    Work, 
+    Short, 
+    Long,
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -63,24 +66,25 @@ impl Default for AppColorScheme{
     }
 }
 
-impl Default for PomoTimer{
-    fn default() -> Self {
-        Self {
-            time_data: Arc::new(Mutex::new(TimerData::default())),
-        }
-    }
-}
+
 impl Default for TimerData{
     fn default() -> Self{
         Self {
-            current_left: Duration::from_secs(0),
             timer_state: TimerState::Done, 
-            total_time: Duration::from_secs(5),
+            work_time: WorkTimes::Work,
         }
     }
     
 }
-
+impl WorkTimes{
+    pub fn time(&self) -> Duration {
+        match *self {
+           WorkTimes::Work => Duration::from_secs(25*60), 
+           WorkTimes::Long => Duration::from_secs(15*60),
+           WorkTimes::Short => Duration::from_secs(5*60),
+        }
+    }
+}
 impl TimerData{
     fn as_minutes(dur: &Duration) -> String {
         let secs = dur.as_secs();
@@ -104,42 +108,10 @@ impl TimerData{
     }
 }
 
-            
-impl PomoTimer{
-    pub fn new(time_data: Arc<Mutex<TimerData>>)-> Self {
-        PomoTimer {time_data}
-    }
-    pub fn init(&mut self) {
-       self.run(); 
-    }
-    fn run(&mut self) {
-        loop {
-            //is this cringe?
-            //YES, you don't even need to "run" timer in different thread
-            thread::sleep(Duration::from_millis(250));
-            self.update(); 
-        }
-    }
-    fn update(&mut self)  {
-       let mut data = self.time_data.lock().unwrap();
-       match data.timer_state {
-            TimerState::Started(start_time) =>{
-                data.current_left = data.total_time - start_time.elapsed();
-                if data.current_left.as_secs() <= 0 {
-                    data.timer_state = TimerState::Done;
-                }
-            }
-            _ => ()
-        }
-    }
- 
-}
-
-
 impl Default for TimerApp {
     fn default() -> Self {
         Self {
-            timer_data: None,
+            timer_data: TimerData::default(),
             color_scheme: AppColorScheme::default(),
         }
     }
@@ -150,8 +122,8 @@ impl TimerApp {
     fn setup_fonts(cc: &eframe::CreationContext<'_>) {
         let mut fonts = egui::FontDefinitions::default();
 
-        fonts.font_data.insert("Fira Code Mono".to_owned(), egui::FontData::from_static(include_bytes!("../assets/FiraCodeNerdFontMono-Regular.ttf")));
-        fonts.families.entry(egui::FontFamily::Monospace).or_default().insert(0, "Fira Code Mono".to_owned());
+        fonts.font_data.insert("Roboto".to_owned(), egui::FontData::from_static(include_bytes!("../assets/Roboto-Regular.ttf")));
+        fonts.families.entry(egui::FontFamily::Monospace).or_default().insert(0, "Roboto".to_owned());
         cc.egui_ctx.set_fonts(fonts);
     }
 
@@ -171,7 +143,6 @@ impl TimerApp {
     } 
 
     fn setup_visuals(cc: &eframe::CreationContext<'_>, color_scheme:& AppColorScheme) {
-
         cc.egui_ctx.set_visuals(Visuals {
             panel_fill: color_scheme.fill_color,
             window_fill: color_scheme.fill_color,
@@ -191,26 +162,26 @@ impl TimerApp {
                     expansion: 0.0
                 },
                 noninteractive: WidgetVisuals {
-                    bg_fill: Color32::from_rgb(217,93,57),
-                    weak_bg_fill: Color32::from_rgb(217,93,57),
-                    bg_stroke: egui::Stroke::new(1.0, Color32::from_rgb(240,162,2)),
-                    fg_stroke: egui::Stroke::new(1.0, Color32::from_rgb(249, 224, 217)),
+                    bg_fill: color_scheme.ligth_bg_color,
+                    weak_bg_fill: color_scheme.ligth_bg_color,
+                    bg_stroke: egui::Stroke::new(1.0, color_scheme.ligth_bg_stroke),
+                    fg_stroke: egui::Stroke::new(1.0, color_scheme.ligth_fg_stroke),
                     rounding: egui::Rounding::same(3.0),
                     expansion: 0.0
                 },
                 hovered: WidgetVisuals {
-                    bg_fill: Color32::from_rgb(241, 136, 5),
-                    weak_bg_fill: Color32::from_rgb(241, 136, 5),
-                    bg_stroke: egui::Stroke::new(1.0, Color32::from_rgb(253, 186, 53)),
-                    fg_stroke: egui::Stroke::new(1.0, Color32::from_rgb(249, 224, 217)),
+                    bg_fill: color_scheme.dark_bg_color,
+                    weak_bg_fill: color_scheme.dark_bg_color, 
+                    bg_stroke: egui::Stroke::new(1.0, color_scheme.dark_bg_stroke),
+                    fg_stroke: egui::Stroke::new(1.0, color_scheme.dark_fg_stroke),
                     rounding: egui::Rounding::same(3.0),
                     expansion: 0.5
                 },
                 active: WidgetVisuals {
-                    bg_fill: Color32::from_rgb(241, 136, 5),
-                    weak_bg_fill: Color32::from_rgb(241, 136, 5),
-                    bg_stroke: egui::Stroke::new(1.0, Color32::from_rgb(253, 186, 53)),
-                    fg_stroke: egui::Stroke::new(1.0, Color32::from_rgb(249, 224, 217)),
+                    bg_fill: color_scheme.dark_bg_color,
+                    weak_bg_fill: color_scheme.dark_bg_color,
+                    bg_stroke: egui::Stroke::new(1.0, color_scheme.dark_bg_stroke),
+                    fg_stroke: egui::Stroke::new(1.0, color_scheme.dark_fg_stroke),
                     rounding: egui::Rounding::same(3.0),
                     expansion: -0.5
                 },
@@ -225,7 +196,7 @@ impl TimerApp {
             }
     }
 
-    pub fn new(cc: &eframe::CreationContext<'_>, timer_data: Arc<Mutex<TimerData>>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, timer_data: TimerData) -> Self {
         let color_scheme = AppColorScheme::default();   
         cc.egui_ctx.set_pixels_per_point(2.5);
         TimerApp::setup_fonts(cc);
@@ -236,16 +207,16 @@ impl TimerApp {
         // Note that you must enable the `persistence` feature for this to work.
         if let Some(storage) = cc.storage {
             let mut app: TimerApp = eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default();
-            app.timer_data = Some(timer_data);
+            app.timer_data = timer_data;
             return app 
         }
         
         let mut app = TimerApp::default();
-        app.timer_data = Some(timer_data);
+        app.timer_data = timer_data;
         return app
     }
 
-    fn draw_timer_text_element<'a>(ui: &'a mut Ui, open_data: &mut std::sync::MutexGuard<'_, TimerData>, color_scheme:& AppColorScheme ) {
+    fn draw_timer_text_element<'a>(ui: &'a mut Ui, open_data: &mut TimerData, color_scheme:& AppColorScheme ) {
         match open_data.timer_state {
             TimerState::Started(_) => {ui.visuals_mut().extreme_bg_color = color_scheme.timer_active}
             _ => {ui.visuals_mut().extreme_bg_color = color_scheme.timer_paused}
@@ -254,11 +225,14 @@ impl TimerApp {
         }
 
         let mut display_string = match open_data.timer_state {
-            TimerState::Started(_)|TimerState::Paused(_) => {
-                format!("{}", TimerData::as_minutes(&open_data.current_left))
+            TimerState::Started(time_stamp) => {
+                format!("{}", TimerData::as_minutes(&(open_data.work_time.time()-time_stamp.elapsed())))
             }
             TimerState::Done => {
-                format!("{}", TimerData::as_minutes(&open_data.total_time))
+                format!("{}", TimerData::as_minutes(&open_data.work_time.time()))
+            }
+            TimerState::Paused(paused_time) => {
+                format!("{}", TimerData::as_minutes(&(open_data.work_time.time()-paused_time)))
             }
         };
         
@@ -267,18 +241,10 @@ impl TimerApp {
         let response = ui.add_sized([100.0, 30.0], egui::TextEdit::singleline(&mut display_string)
                                     .font(TextStyle::Name("Timer".into()))
                                     .interactive(open_data.timer_state == TimerState::Done));
-        if response.changed() {
-            if let Ok(time_f32) = display_string.parse::<f32>() {
-                if let Ok(duration) = Duration::try_from_secs_f32(time_f32) {
-                    open_data.total_time = duration; //doesn't work since we redraw every
-                                                     //frame, maybe don't redraw when
-                                                     //TimerState == Done?
-                }
-            }
-        } 
-    }
+    } 
+    
 
-    fn draw_skip_button_element<'a>(ui: &'a mut Ui, open_data: &mut std::sync::MutexGuard<'_, TimerData> ) {
+    fn draw_skip_button_element<'a>(ui: &'a mut Ui, open_data: &mut TimerData ) {
         if ui.add_sized([10.0, 30.0], Button::new(">")).clicked() {
             match open_data.timer_state {
                 TimerState::Done => (),
@@ -288,7 +254,7 @@ impl TimerApp {
 
     } 
 
-    fn draw_pause_button_element<'a>(ui: &'a mut Ui, open_data: &mut std::sync::MutexGuard<'_, TimerData> ) {
+    fn draw_pause_button_element<'a>(ui: &'a mut Ui, open_data: &mut TimerData ) {
          let button_string = match open_data.timer_state {
                 TimerState::Paused(_) => "Restart timer",
                 TimerState::Done => "Start Timer",
@@ -304,22 +270,29 @@ impl TimerApp {
         }
 
     } 
-    fn draw_set_time_buttons_element<'a>(ui: &'a mut Ui, open_data: &mut std::sync::MutexGuard<'_, TimerData> ){
-       ui.horizontal(|ui|{ 
-            let changing_time_allowed = open_data.timer_state == TimerState::Done;
-            if ui.add_enabled(changing_time_allowed, egui::Button::new("Work")).clicked() {
-                open_data.total_time = Duration::from_secs(25*60); 
+    fn draw_set_time_buttons_element<'a>(ui: &'a mut Ui, open_data: &mut TimerData ){
+       ui.vertical(|ui|{ 
+            let changing_time_allowed = match open_data.timer_state {
+                TimerState::Started(_) => false,
+                _ => true
+
+            };
+            if ui.add_enabled(changing_time_allowed, egui::RadioButton::new(open_data.work_time == WorkTimes::Work, "Work")).clicked() {
+                open_data.work_time = WorkTimes::Work; 
+                open_data.timer_state = TimerState::Done;
             }
-            if ui.add_enabled(changing_time_allowed, egui::Button::new("Short")).clicked() {
-                open_data.total_time = Duration::from_secs(5*60); 
+            if ui.add_enabled(changing_time_allowed, egui::RadioButton::new(open_data.work_time == WorkTimes::Short, "Short")).clicked() {
+                open_data.work_time = WorkTimes::Short; 
+                open_data.timer_state = TimerState::Done;
             }
-            if ui.add_enabled(changing_time_allowed, egui::Button::new("Long")).clicked() {
-                open_data.total_time = Duration::from_secs(15*60); 
+            if ui.add_enabled(changing_time_allowed, egui::RadioButton::new(open_data.work_time == WorkTimes::Long, "Long")).clicked() {
+                open_data.work_time = WorkTimes::Long;
+                open_data.timer_state = TimerState::Done;
             }
         });
     }
 
-    pub fn draw_from_state<'a>(ui: &'a mut Ui, open_data: &mut std::sync::MutexGuard<'_, TimerData>, color_scheme:& AppColorScheme ) -> &'a mut Ui {
+    pub fn draw_from_state<'a>(ui: &'a mut Ui, open_data: &mut TimerData, color_scheme:& AppColorScheme ) -> &'a mut Ui {
         ui.horizontal(|ui| {
             TimerApp::draw_timer_text_element(ui, open_data, color_scheme);
             TimerApp::draw_skip_button_element(ui, open_data);
@@ -344,7 +317,7 @@ impl eframe::App for TimerApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let mut open_data = self.timer_data.as_ref().unwrap().lock().unwrap();
+        let open_data = &mut self.timer_data;
         let color_scheme = &self.color_scheme;
         #[cfg(not(target_arch = "wasm32"))] // no File->Quit on web pages!
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
@@ -359,9 +332,14 @@ impl eframe::App for TimerApp {
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            let _ui = TimerApp::draw_from_state(ui, &mut open_data, color_scheme);
-            });
-        ctx.request_repaint_after(Duration::from_secs(1));
+            let _ui = TimerApp::draw_from_state(ui, open_data, color_scheme);
+        });
+
+        if _frame.info().window_info.focused {
+            ctx.request_repaint_after(Duration::from_secs(1));
+        } else {
+            ctx.request_repaint_after(Duration::from_secs(5));
+        }
     }
 
 

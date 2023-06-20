@@ -3,5 +3,4 @@
 mod app;
 pub use app::TimerApp;
 pub use app::TimerData;
-pub use app::PomoTimer;
 
