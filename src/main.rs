@@ -15,7 +15,7 @@ async fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions{
         resizable: false,
         transparent: true,
-        initial_window_size: Option::from(Vec2::new(350 as f32, 400 as f32)),
+        initial_window_size: Option::from(Vec2::new(350 as f32, 300 as f32)),
         initial_window_pos: Option::from(Pos2::new(10 as f32, 10 as f32)), 
         ..Default::default()
     };
