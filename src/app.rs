@@ -1,6 +1,6 @@
-use std::time::{self, Duration};
+use std::time::Duration;
 use std::time::Instant;
-use std::sync::{Mutex,Arc, MutexGuard};
+use std::sync::{Mutex,Arc};
 use std::thread;
 use eframe::{egui::{TextBuffer, Visuals, Color32, Frame, Rect, Pos2, Vec2, Sense, RichText, TextFormat, FontFamily, FontId, Label}};
 use egui::style::{Widgets, WidgetVisuals};
@@ -10,8 +10,8 @@ use egui::{text_edit, Button, Ui, TextStyle, Widget};
 #[serde(default)]
 pub struct TimerApp {
     #[serde(skip)]
-    //can you make this field read-only? only a refrence perhaps?
     timer_data: Option<Arc<Mutex<TimerData>>>,
+    color_scheme: AppColorScheme,
 }
 
 pub struct PomoTimer{
@@ -32,6 +32,35 @@ pub enum TimerState{
     Started (Instant),
     Paused (Duration),
     Done,
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(default)]
+pub struct AppColorScheme{
+   fill_color: Color32,
+   timer_paused: Color32,
+   timer_active: Color32,
+   ligth_bg_color: Color32,
+   dark_bg_color: Color32,
+   ligth_bg_stroke: Color32,
+   ligth_fg_stroke: Color32,
+   dark_bg_stroke: Color32,
+   dark_fg_stroke: Color32,
+}
+impl Default for AppColorScheme{
+    fn default() -> Self {
+        AppColorScheme {
+            fill_color: Color32::from_rgb(88,31,24),
+            timer_active: Color32::from_rgb(33, 44, 91),
+            timer_paused: Color32::from_rgb(16,22,45),
+            ligth_bg_color: Color32::from_rgb(217, 93, 57),
+            dark_bg_color: Color32::from_rgb(241, 136, 5),
+            ligth_fg_stroke: Color32::from_rgb(249, 224, 217),
+            ligth_bg_stroke: Color32::from_rgb(240, 162, 2),
+            dark_fg_stroke: Color32::from_rgb(249, 224, 217),
+            dark_bg_stroke: Color32::from_rgb(253, 186, 53),
+        } 
+    }
 }
 
 impl Default for PomoTimer{
@@ -111,44 +140,53 @@ impl Default for TimerApp {
     fn default() -> Self {
         Self {
             timer_data: None,
+            color_scheme: AppColorScheme::default(),
         }
     }
 }
 
 impl TimerApp {
     /// Called once before the first frame.
-    pub fn new(cc: &eframe::CreationContext<'_>, timer_data: Arc<Mutex<TimerData>>) -> Self {
-        
-        cc.egui_ctx.set_pixels_per_point(2.5);
-
+    fn setup_fonts(cc: &eframe::CreationContext<'_>) {
         let mut fonts = egui::FontDefinitions::default();
 
         fonts.font_data.insert("Fira Code Mono".to_owned(), egui::FontData::from_static(include_bytes!("../assets/FiraCodeNerdFontMono-Regular.ttf")));
         fonts.families.entry(egui::FontFamily::Monospace).or_default().insert(0, "Fira Code Mono".to_owned());
         cc.egui_ctx.set_fonts(fonts);
+    }
 
-        let mut style = (*cc.egui_ctx.style()).clone();
+    fn setup_style(cc: &eframe::CreationContext<'_>) {
         use FontFamily::{Proportional, Monospace};
+        let mut style = (*cc.egui_ctx.style()).clone();
         style.text_styles = [
-        (TextStyle::Heading, FontId::new(25.0, Proportional)),
-        (TextStyle::Body, FontId::new(16.0, Proportional)),
-        (TextStyle::Monospace, FontId::new(12.0, Monospace)),
-        (TextStyle::Button, FontId::new(12.0, Proportional)),
-        (TextStyle::Small, FontId::new(8.0, Proportional)),
-        (TextStyle::Name("Timer".into()), FontId::new(24.0, Monospace)),
+            (TextStyle::Heading, FontId::new(25.0, Proportional)),
+            (TextStyle::Body, FontId::new(16.0, Proportional)),
+            (TextStyle::Monospace, FontId::new(12.0, Monospace)),
+            (TextStyle::Button, FontId::new(12.0, Proportional)),
+            (TextStyle::Small, FontId::new(8.0, Proportional)),
+            (TextStyle::Name("Timer".into()), FontId::new(24.0, Monospace)),
         ].into();
+
         cc.egui_ctx.set_style(style);
+    } 
+
+    fn setup_visuals(cc: &eframe::CreationContext<'_>, color_scheme:& AppColorScheme) {
+
         cc.egui_ctx.set_visuals(Visuals {
-            panel_fill: Color32::from_rgb(88,31,24),
-            window_fill: Color32::from_rgb(88, 31, 24),
-            extreme_bg_color: Color32::from_rgb(16, 22, 45),
-            //override_text_color: Some(Color32::from_rgb(30, 30, 63)),
-            widgets: Widgets {
+            panel_fill: color_scheme.fill_color,
+            window_fill: color_scheme.fill_color,
+            extreme_bg_color: color_scheme.timer_paused,
+            widgets: TimerApp::standard_widget_visuals(color_scheme),
+            ..Default::default()
+        });
+    }
+    pub fn standard_widget_visuals(color_scheme:& AppColorScheme) -> Widgets {
+        Widgets {
                 inactive: WidgetVisuals {
-                    bg_fill: Color32::from_rgb(217,93,57),
-                    weak_bg_fill: Color32::from_rgb(217,93,57),
-                    bg_stroke: egui::Stroke::new(1.0, Color32::from_rgb(240,162,2)),
-                    fg_stroke: egui::Stroke::new(1.0, Color32::from_rgb(249, 224, 217)),
+                    bg_fill: color_scheme.ligth_bg_color,
+                    weak_bg_fill: color_scheme.ligth_bg_color,
+                    bg_stroke: egui::Stroke::new(1.0, color_scheme.ligth_bg_stroke),
+                    fg_stroke: egui::Stroke::new(1.0, color_scheme.ligth_fg_stroke),
                     rounding: egui::Rounding::same(3.0),
                     expansion: 0.0
                 },
@@ -184,10 +222,15 @@ impl TimerApp {
                     rounding: egui::Rounding::same(3.0),
                     expansion: -0.5
                 },
-                },
-            ..Default::default()
-        });
-        
+            }
+    }
+
+    pub fn new(cc: &eframe::CreationContext<'_>, timer_data: Arc<Mutex<TimerData>>) -> Self {
+        let color_scheme = AppColorScheme::default();   
+        cc.egui_ctx.set_pixels_per_point(2.5);
+        TimerApp::setup_fonts(cc);
+        TimerApp::setup_style(cc);
+        TimerApp::setup_visuals(cc, &color_scheme);
 
         // Load previous app state (if any).
         // Note that you must enable the `persistence` feature for this to work.
@@ -202,73 +245,87 @@ impl TimerApp {
         return app
     }
 
-    pub fn draw_from_state<'a>(ui: &'a mut Ui, open_data: &mut std::sync::MutexGuard<'_, TimerData> ) -> &'a mut Ui {
+    fn draw_timer_text_element<'a>(ui: &'a mut Ui, open_data: &mut std::sync::MutexGuard<'_, TimerData>, color_scheme:& AppColorScheme ) {
         match open_data.timer_state {
-            TimerState::Started(_) => {ui.visuals_mut().extreme_bg_color = Color32::from_rgb(32, 44, 91);}
-            _ => ()
+            TimerState::Started(_) => {ui.visuals_mut().extreme_bg_color = color_scheme.timer_active}
+            _ => {ui.visuals_mut().extreme_bg_color = color_scheme.timer_paused}
+
 
         }
-        ui.horizontal(|ui| {
 
-            let mut display_string = match open_data.timer_state {
-                TimerState::Started(_)|TimerState::Paused(_) => {
-                    format!("{}", TimerData::as_minutes(&open_data.current_left))
-                }
-                TimerState::Done => {
-                    format!("{}", TimerData::as_minutes(&open_data.total_time))
-                }
-            };
-            
-            
-
-            let response = ui.add_sized([100.0, 30.0], egui::TextEdit::singleline(&mut display_string)
-                                        .font(TextStyle::Name("Timer".into()))
-                                        .interactive(open_data.timer_state == TimerState::Done));
-            if response.changed() {
-                if let Ok(time_f32) = display_string.parse::<f32>() {
-                    if let Ok(duration) = Duration::try_from_secs_f32(time_f32) {
-                        open_data.total_time = duration; //doesn't work since we redraw every
-                                                         //frame, maybe don't redraw when
-                                                         //TimerState == Done?
-                    }
-                }
+        let mut display_string = match open_data.timer_state {
+            TimerState::Started(_)|TimerState::Paused(_) => {
+                format!("{}", TimerData::as_minutes(&open_data.current_left))
             }
-            if ui.add_sized([10.0, 30.0], Button::new(">")).clicked() {
-                match open_data.timer_state {
-                    TimerState::Done => (),
-                    TimerState::Paused(_)|TimerState::Started(_) => {open_data.timer_state = TimerState::Done}
-                }
+            TimerState::Done => {
+                format!("{}", TimerData::as_minutes(&open_data.total_time))
             }
-
-        });
+        };
         
-            let button_string = match open_data.timer_state {
-                TimerState::Done | TimerState::Paused(_) => "Restart timer",
+        
+
+        let response = ui.add_sized([100.0, 30.0], egui::TextEdit::singleline(&mut display_string)
+                                    .font(TextStyle::Name("Timer".into()))
+                                    .interactive(open_data.timer_state == TimerState::Done));
+        if response.changed() {
+            if let Ok(time_f32) = display_string.parse::<f32>() {
+                if let Ok(duration) = Duration::try_from_secs_f32(time_f32) {
+                    open_data.total_time = duration; //doesn't work since we redraw every
+                                                     //frame, maybe don't redraw when
+                                                     //TimerState == Done?
+                }
+            }
+        } 
+    }
+
+    fn draw_skip_button_element<'a>(ui: &'a mut Ui, open_data: &mut std::sync::MutexGuard<'_, TimerData> ) {
+        if ui.add_sized([10.0, 30.0], Button::new(">")).clicked() {
+            match open_data.timer_state {
+                TimerState::Done => (),
+                TimerState::Paused(_)|TimerState::Started(_) => {open_data.timer_state = TimerState::Done}
+            }
+        }
+
+    } 
+
+    fn draw_pause_button_element<'a>(ui: &'a mut Ui, open_data: &mut std::sync::MutexGuard<'_, TimerData> ) {
+         let button_string = match open_data.timer_state {
+                TimerState::Paused(_) => "Restart timer",
+                TimerState::Done => "Start Timer",
                 TimerState::Started(_) => "Pause"
             };
-            if ui.add_sized([80.0, 10.0], egui::Button::new(button_string)).clicked() {
-                match open_data.timer_state {
-                    TimerState::Done => {open_data.timer_state = TimerState::Started(Instant::now())}
-                    TimerState::Started(started_time) => {open_data.timer_state = TimerState::Paused(started_time.elapsed())} 
-                    TimerState::Paused(paused_time) => {open_data.timer_state = TimerState::Started(Instant::now()-paused_time)}
-                    _ => {open_data.timer_state = TimerState::Done}
-                }
+        if ui.add_sized([80.0, 10.0], egui::Button::new(button_string)).clicked() {
+            match open_data.timer_state {
+                TimerState::Done => {open_data.timer_state = TimerState::Started(Instant::now())}
+                TimerState::Started(started_time) => {open_data.timer_state = TimerState::Paused(started_time.elapsed())} 
+                TimerState::Paused(paused_time) => {open_data.timer_state = TimerState::Started(Instant::now()-paused_time)}
+                _ => {open_data.timer_state = TimerState::Done}
             }
-            ui.horizontal(|ui|{ 
-                let chaning_time_allowed = open_data.timer_state == TimerState::Done;
-                if ui.add_enabled(chaning_time_allowed, egui::Button::new("Work")).clicked() {
-                    open_data.total_time = Duration::from_secs(25*60); 
-                }
-                if ui.add_enabled(chaning_time_allowed, egui::Button::new("Short")).clicked() {
-                    open_data.total_time = Duration::from_secs(5*60); 
-                }
-                if ui.add_enabled(chaning_time_allowed, egui::Button::new("Long")).clicked() {
-                    open_data.total_time = Duration::from_secs(15*60); 
-                }
-                 
-                
-            });
+        }
 
+    } 
+    fn draw_set_time_buttons_element<'a>(ui: &'a mut Ui, open_data: &mut std::sync::MutexGuard<'_, TimerData> ){
+       ui.horizontal(|ui|{ 
+            let changing_time_allowed = open_data.timer_state == TimerState::Done;
+            if ui.add_enabled(changing_time_allowed, egui::Button::new("Work")).clicked() {
+                open_data.total_time = Duration::from_secs(25*60); 
+            }
+            if ui.add_enabled(changing_time_allowed, egui::Button::new("Short")).clicked() {
+                open_data.total_time = Duration::from_secs(5*60); 
+            }
+            if ui.add_enabled(changing_time_allowed, egui::Button::new("Long")).clicked() {
+                open_data.total_time = Duration::from_secs(15*60); 
+            }
+        });
+    }
+
+    pub fn draw_from_state<'a>(ui: &'a mut Ui, open_data: &mut std::sync::MutexGuard<'_, TimerData>, color_scheme:& AppColorScheme ) -> &'a mut Ui {
+        ui.horizontal(|ui| {
+            TimerApp::draw_timer_text_element(ui, open_data, color_scheme);
+            TimerApp::draw_skip_button_element(ui, open_data);
+        });
+        TimerApp::draw_pause_button_element(ui, open_data); 
+        TimerApp::draw_set_time_buttons_element(ui, open_data);
         return ui
     }
 }
@@ -288,7 +345,7 @@ impl eframe::App for TimerApp {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let mut open_data = self.timer_data.as_ref().unwrap().lock().unwrap();
-
+        let color_scheme = &self.color_scheme;
         #[cfg(not(target_arch = "wasm32"))] // no File->Quit on web pages!
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             // The top panel is often a good place for a menu bar:
@@ -300,8 +357,9 @@ impl eframe::App for TimerApp {
                 });
             });
         });
+
         egui::CentralPanel::default().show(ctx, |ui| {
-            let ui = TimerApp::draw_from_state(ui, &mut open_data);
+            let _ui = TimerApp::draw_from_state(ui, &mut open_data, color_scheme);
             });
         ctx.request_repaint_after(Duration::from_secs(1));
     }
