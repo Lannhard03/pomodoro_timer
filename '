@@ -1,0 +1,180 @@
+use std::time::{self, Duration};
+use std::time::Instant;
+use std::sync::{Mutex,Arc};
+
+use tokio;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use eframe::{egui::{TextBuffer, Visuals, Color32, Frame, Rect, Pos2, Vec2, Sense, RichText, TextFormat, FontFamily, FontId, Label}};
+use egui::{text_edit, Button};
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(default)]
+pub struct TimerApp {
+    timer: PomoTimer,
+}
+
+pub struct PomoTimer{
+    time_data: TimerData,
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(default)]
+pub struct TimerData{
+    current_elapsed: Duration,
+    timer_state: TimerState,
+}
+
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(default)]
+pub struct TimerState{
+    is_active: bool,
+    is_reset: bool,
+}
+
+impl Default for PomoTimer{
+    fn default() -> Self {
+        Self {
+            time_data: TimerData::default(),
+        }
+    }
+}
+impl Default for TimerData{
+    fn default() -> Self{
+        Self {
+            current_elapsed: Duration::from_secs_f32(0.0),
+            timer_state: TimerState::default(), 
+        }
+    }
+}
+
+impl Default for TimerState {
+    fn default() -> Self {
+        Self {is_reset: false, is_active: false}
+    }   
+}
+            
+impl PomoTimer{
+    fn display(&self) -> String {
+        let return_string;
+        if self.timer_started {
+            return_string = format!("{}", self.time_left());
+        } else if !self.timer_reset {
+            return_string = String::from("0");
+        }
+        else {
+            return_string = format!("{}", self.total_time.as_secs());
+        }
+        return_string
+    }
+
+    fn update(&mut self)  {
+        if self.time_left()<0f32{
+            self.timer_started = false;
+            self.timer_reset = false;
+        }
+    }
+    fn time_left(&self)->f32 {
+        self.total_time.as_secs_f32()
+    }
+    fn update_state(&mut self) {
+        self.timer_started = !self.timer_started;
+        if !self.timer_reset {
+            self.timer_reset = true; 
+        }
+
+    }
+ 
+}
+
+
+impl Default for TimerApp {
+    fn default() -> Self {
+        Self {
+            timer: PomoTimer::default(),
+        }
+    }
+}
+
+impl TimerApp {
+    /// Called once before the first frame.
+    pub fn new(cc: &eframe::CreationContext<'_>, timer: Arc<Mutex<PomoTimer>>) -> Self {
+        
+        // This is also where you can customize the look and feel of egui using
+        // `cc.egui_ctx.set_visuals` and `cc.egui_ctx.set_fonts`.
+        cc.egui_ctx.set_pixels_per_point(2.5);
+        
+
+        // Load previous app state (if any).
+        // Note that you must enable the `persistence` feature for this to work.
+        if let Some(storage) = cc.storage {
+            eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default()
+        }
+        
+        //Default::default()
+        TimerApp::default() 
+    }
+}
+
+impl eframe::App for TimerApp {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(storage, eframe::APP_KEY, self);
+    }
+
+    fn persist_native_window(&self) -> bool {
+        false
+    }
+
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let Self { timer} = self;
+        timer.update();
+        // Examples of how to create different panels and windows.
+        // Pick whichever suits you.
+        // Tip: a good default choice is to just keep the `CentralPanel`.
+        // For inspiration and more examples, go to https://emilk.github.io/egui
+
+        #[cfg(not(target_arch = "wasm32"))] // no File->Quit on web pages!
+        egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
+            // The top panel is often a good place for a menu bar:
+            egui::menu::bar(ui, |ui| {
+                ui.menu_button("File", |ui| {
+                    if ui.button("Quit").clicked() {
+                        _frame.close();
+                    }
+                });
+            });
+        });
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            // The central panel the region left after adding TopPanel's and SidePanel's
+            ui.vertical_centered(|ui| {
+                let display_string = &mut format!("{}",timer.display());
+                let response = ui.add(egui::TextEdit::singleline(display_string).interactive(!timer.timer_started));
+                if response.changed() & !timer.timer_started{
+                    if let Ok(time_f32) = display_string.parse::<f32>() {
+                        if let Ok(duration) = Duration::try_from_secs_f32(time_f32) {
+                           timer.total_time = duration;
+                        }
+                    }
+                }
+                if ui.add(egui::Button::new("Start timer")).clicked() {
+                    timer.update_state();
+                }
+                });
+                ui.columns(3, |coloumns| {
+                        coloumns[0].add(Button::new("Work"));
+                        coloumns[1].add(Button::new("Short"));
+                        coloumns[2].add(Button::new("Long"));
+                });
+                
+            });
+        if false {
+            egui::Window::new("Window").show(ctx, |ui| {
+                ui.label("Windows can be moved by dragging them.");
+                ui.label("They are automatically sized based on contents.");
+                ui.label("You can turn on resizing and scrolling if you like.");
+                ui.label("You would normally choose either panels OR windows.");
+            });
+        }
+    }
+}

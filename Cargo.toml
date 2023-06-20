@@ -1,12 +1,14 @@
 [package]
-name = "pomodora_timer"
+name = "pomodoro_timer"
 version = "0.1.0"
 authors = ["Gustav Lannhard"]
-edition = "2023"
-rust-version = "1.69"
+edition = "2021"
+rust-version = "1.70"
+
 
 
 [dependencies]
+tokio = { version = "1.28.2", features = ["full"] }
 egui = "0.22.0"
 eframe = { version = "0.22.0", default-features = false, features = [
     "default_fonts", # Embed the default egui fonts.
