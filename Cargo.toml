@@ -8,7 +8,6 @@ rust-version = "1.70"
 
 
 [dependencies]
-tokio = { version = "1.28.2", features = ["full"] }
 egui = "0.22.0"
 eframe = { version = "0.22.0", default-features = false, features = [
     "default_fonts", # Embed the default egui fonts.
