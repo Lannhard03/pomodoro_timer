@@ -38,7 +38,7 @@ fn main() {
             .start(
                 "the_canvas_id", // hardcode it
                 web_options,
-                Box::new(|cc| Box::new(pomodoro_timer::TimerApp::new(cc))),
+                Box::new(|cc| Box::new(pomodoro_timer::TimerApp::new(cc, pomodoro_timer::TimerData::default()))),
             )
             .await
             .expect("failed to start eframe");

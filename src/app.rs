@@ -1,14 +1,16 @@
 use std::collections::HashMap;
 use std::time::Duration;
 use std::time::Instant;
-use eframe::{egui::{TextBuffer, Visuals, Color32, Frame, Rect, Pos2, Vec2, Sense, RichText, TextFormat, FontFamily, FontId, Label}};
-use egui::Margin;
-use egui::Rounding;
-use egui::Stroke;
-use egui::style::Spacing;
-use egui::style::{Widgets, WidgetVisuals};
-use egui::{text_edit, Button, Ui, TextStyle, Widget};
-
+use eframe::egui::RichText;
+use egui::{Button, Ui, TextStyle};
+use crate::AppColorScheme;
+use crate::visuals::TimerAppVisuals;
+use crate::custom_widgets::TimerDisplay;
+use std::fs::File;
+use std::io::BufReader;
+use rodio;
+use rodio::source::Source;
+use std::thread;
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct TimerApp {
@@ -17,7 +19,9 @@ pub struct TimerApp {
     timer_data: TimerData,
     color_scheme: AppColorScheme,
     #[serde(skip)]
-    current_screen: Screen
+    current_screen: Screen,
+    #[serde(skip)]
+    timer_visuals: TimerAppVisuals,
 }
 
 
@@ -43,55 +47,31 @@ pub enum WorkTimes {
     Short, 
     Long,
 }
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone)]
 pub enum Screen {
     TimerScreen,
-    SettingsScreen,
+    SettingsScreen{editable_settings: Vec<String>},
 }
 
-#[derive(serde::Deserialize, serde::Serialize)]
+#[derive(PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct Setting{
-    work_times_times: HashMap<WorkTimes, Duration>,  //needs to store time data aswell?
+    work_times_times: HashMap<WorkTimes, Duration>,  
+    alert_sound_path: String,
 }
 
-#[derive(serde::Deserialize, serde::Serialize)]
-#[serde(default)]
-pub struct AppColorScheme{
-   fill_color: Color32,
-   timer_paused: Color32,
-   timer_active: Color32,
-   ligth_bg_color: Color32,
-   dark_bg_color: Color32,
-   ligth_bg_stroke: Color32,
-   ligth_fg_stroke: Color32,
-   dark_bg_stroke: Color32,
-   dark_fg_stroke: Color32,
-}
+
 impl Default for Setting{
     fn default() -> Self {
         Setting {
             work_times_times: HashMap::from([(WorkTimes::Work, Duration::from_secs(25*60)),
                                              (WorkTimes::Short, Duration::from_secs(5*60)),
                                              (WorkTimes::Long, Duration::from_secs(15*60))]),
+            alert_sound_path: "assets/alert_sound.wav".into(),
         }
     }
 }
-impl Default for AppColorScheme{
-    fn default() -> Self {
-        AppColorScheme {
-            fill_color: Color32::from_rgb(88,31,24),
-            timer_active: Color32::from_rgb(33, 44, 91),
-            timer_paused: Color32::from_rgb(16,22,45),
-            ligth_bg_color: Color32::from_rgb(217, 93, 57),
-            dark_bg_color: Color32::from_rgb(241, 136, 5),
-            ligth_fg_stroke: Color32::from_rgb(249, 224, 217),
-            ligth_bg_stroke: Color32::from_rgb(240, 162, 2),
-            dark_fg_stroke: Color32::from_rgb(249, 224, 217),
-            dark_bg_stroke: Color32::from_rgb(253, 186, 53),
-        } 
-    }
-}
+
 
 
 impl Default for TimerData{
@@ -104,7 +84,7 @@ impl Default for TimerData{
     
 }
 impl TimerData{
-    fn as_minutes(dur: &Duration) -> String {
+    fn dur_as_minutes(dur: &Duration) -> String {
         let secs = dur.as_secs();
         let minutes = if secs/60 >= 10 {
             format!("{}", secs/60)
@@ -124,8 +104,48 @@ impl TimerData{
 
        format!("{}:{}", minutes, secs)
     }
-    fn get_work_time(& self, work_time_setting: & HashMap<WorkTimes, Duration>) -> Duration {
-        work_time_setting.get(& self.work_time).unwrap_or(& Duration::from_secs(0)).clone()
+    fn minutes_as_dur(minute: &String) -> Option<Duration> {
+        let minute = minute.trim().clone();
+        let display_digits = minute.split(':');
+        let mut is_numeric = true;
+        let converted_digits: Vec<u64> = display_digits.map(|digit_display| {
+            digit_display.parse::<u64>().unwrap_or_else(|_x| {is_numeric = false; 0})
+        }).collect();
+        if is_numeric {
+            match converted_digits.len() {
+                1 => {return Some(Duration::from_secs(converted_digits[0]));}
+                2 => {return Some(Duration::from_secs(60*converted_digits[0]+converted_digits[1]));}
+                _ => {return None}
+            }
+        } else {
+            return None
+        }
+ 
+    }
+    fn get_work_time(work_time: &WorkTimes, work_time_setting: & HashMap<WorkTimes, Duration>) -> Duration {
+        work_time_setting.get(work_time).unwrap_or(& Duration::from_secs(0)).clone()
+    }
+    fn calculate_timer_text(&self, settings: & Setting) -> String {
+        match self.timer_state {
+            TimerState::Started(time_stamp) => {
+                format!("{}", TimerData::dur_as_minutes(&(TimerData::get_work_time(&self.work_time, &settings.work_times_times)
+                                                          .checked_sub(time_stamp.elapsed()).unwrap_or(Duration::from_secs(0)))))
+            }
+            TimerState::Done => {
+                format!("{}", TimerData::dur_as_minutes(&TimerData::get_work_time(&self.work_time, &settings.work_times_times)))
+            }
+            TimerState::Paused(paused_time) => {
+                format!("{}", TimerData::dur_as_minutes(&(TimerData::get_work_time(&self.work_time, &settings.work_times_times)-paused_time)))
+            }
+        }
+    }
+    fn load_editable_settings(settings: &Setting) -> Vec<String> {
+        let worktimes_map = &settings.work_times_times;
+        let mut editable_strings: Vec<String> = Vec::new();
+        editable_strings.push(TimerData::dur_as_minutes(worktimes_map.get(&WorkTimes::Work).unwrap()));
+        editable_strings.push(TimerData::dur_as_minutes(worktimes_map.get(&WorkTimes::Long).unwrap()));
+        editable_strings.push(TimerData::dur_as_minutes(worktimes_map.get(&WorkTimes::Short).unwrap()));
+        editable_strings
     }
 }
 
@@ -136,143 +156,37 @@ impl Default for TimerApp {
             timer_data: TimerData::default(),
             color_scheme: AppColorScheme::default(),
             current_screen: Screen::TimerScreen,
+            timer_visuals: TimerAppVisuals::default(),
         }
     }
 }
 
 impl TimerApp {
     /// Called once before the first frame.
-    fn setup_fonts(cc: &eframe::CreationContext<'_>) {
-        let mut fonts = egui::FontDefinitions::default();
-
-        fonts.font_data.insert("Roboto".to_owned(), egui::FontData::from_static(include_bytes!("../assets/Roboto-Regular.ttf")));
-        fonts.families.entry(egui::FontFamily::Monospace).or_default().insert(0, "Roboto".to_owned());
-        cc.egui_ctx.set_fonts(fonts);
-    }
-
-    fn setup_style(cc: &eframe::CreationContext<'_>) {
-        use FontFamily::{Proportional, Monospace};
-        let mut style = (*cc.egui_ctx.style()).clone();
-        style.text_styles = [
-            (TextStyle::Heading, FontId::new(25.0, Proportional)),
-            (TextStyle::Body, FontId::new(16.0, Proportional)),
-            (TextStyle::Monospace, FontId::new(12.0, Monospace)),
-            (TextStyle::Button, FontId::new(12.0, Proportional)),
-            (TextStyle::Small, FontId::new(8.0, Proportional)),
-            (TextStyle::Name("Timer".into()), FontId::new(24.0, Monospace)),
-            (TextStyle::Name("Small Text".into()), FontId::new(8.0, Proportional)),
-        ].into();
-
-        style.spacing = Spacing {
-            menu_margin: Margin {left: -40.0, right: -40.0, top: 0.0, bottom: 0.0},
-            button_padding: Vec2::new(0.0, 0.0),
-            ..Default::default()
-        };
-        cc.egui_ctx.set_style(style);
-    } 
-
-    fn setup_visuals(cc: &eframe::CreationContext<'_>, color_scheme:& AppColorScheme) {
-        cc.egui_ctx.set_visuals(Visuals {
-            panel_fill: color_scheme.fill_color,
-            window_fill: color_scheme.fill_color,
-            selection: egui::style::Selection {bg_fill: color_scheme.ligth_bg_color, stroke: Stroke::new(1.0, color_scheme.ligth_fg_stroke)},
-            extreme_bg_color: color_scheme.timer_paused,
-            widgets: TimerApp::standard_widget_visuals(color_scheme),
-            ..Default::default()
-        });
-    }
-    pub fn standard_widget_visuals(color_scheme:& AppColorScheme) -> Widgets {
-        Widgets {
-                inactive: WidgetVisuals {
-                    bg_fill: color_scheme.ligth_bg_color,
-                    weak_bg_fill: color_scheme.ligth_bg_color,
-                    bg_stroke: egui::Stroke::new(1.0, color_scheme.ligth_bg_stroke),
-                    fg_stroke: egui::Stroke::new(1.0, color_scheme.ligth_fg_stroke),
-                    rounding: egui::Rounding::same(3.0),
-                    expansion: 0.0
-                },
-                noninteractive: WidgetVisuals {
-                    bg_fill: color_scheme.ligth_bg_color,
-                    weak_bg_fill: color_scheme.ligth_bg_color,
-                    bg_stroke: egui::Stroke::new(1.0, color_scheme.ligth_bg_stroke),
-                    fg_stroke: egui::Stroke::new(1.0, color_scheme.ligth_fg_stroke),
-                    rounding: egui::Rounding::same(3.0),
-                    expansion: 0.0
-                },
-                hovered: WidgetVisuals {
-                    bg_fill: color_scheme.dark_bg_color,
-                    weak_bg_fill: color_scheme.dark_bg_color, 
-                    bg_stroke: egui::Stroke::new(1.0, color_scheme.dark_bg_stroke),
-                    fg_stroke: egui::Stroke::new(1.0, color_scheme.dark_fg_stroke),
-                    rounding: egui::Rounding::same(3.0),
-                    expansion: 0.5
-                },
-                active: WidgetVisuals {
-                    bg_fill: color_scheme.dark_bg_color,
-                    weak_bg_fill: color_scheme.dark_bg_color,
-                    bg_stroke: egui::Stroke::new(1.0, color_scheme.dark_bg_stroke),
-                    fg_stroke: egui::Stroke::new(1.0, color_scheme.dark_fg_stroke),
-                    rounding: egui::Rounding::same(3.0),
-                    expansion: -0.5
-                },
-                open: WidgetVisuals {
-                    bg_fill: color_scheme.ligth_bg_color,
-                    weak_bg_fill: color_scheme.ligth_bg_color,
-                    bg_stroke: egui::Stroke::new(1.0, color_scheme.ligth_bg_stroke),
-                    fg_stroke: egui::Stroke::new(1.0, color_scheme.ligth_fg_stroke),
-                    rounding: egui::Rounding::same(3.0),
-                    expansion: -0.5
-                },
-            }
-    }
-
     pub fn new(cc: &eframe::CreationContext<'_>, timer_data: TimerData) -> Self {
-        let color_scheme = AppColorScheme::default();   
-        cc.egui_ctx.set_pixels_per_point(2.5);
-        TimerApp::setup_fonts(cc);
-        TimerApp::setup_style(cc);
-        TimerApp::setup_visuals(cc, &color_scheme);
-
         // Load previous app state (if any).
         // Note that you must enable the `persistence` feature for this to work.
-        if let Some(storage) = cc.storage {
+        let mut app = if let Some(storage) = cc.storage {
             let mut app: TimerApp = eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default();
             app.timer_data = timer_data;
-            return app 
-        }
-        
-        let mut app = TimerApp::default();
-        app.timer_data = timer_data;
-        return app
+            app
+        } else {
+            let mut app = TimerApp::default();
+            app.timer_data = timer_data;
+            app
+        };
+        app.timer_visuals.setup_app_visuals(cc); 
+        app
     }
+    
 
     fn draw_timer_text_element<'a>(&mut self, ui: &'a mut Ui) {
         let timer_bg_color = match self.timer_data.timer_state {
             TimerState::Started(_) => {self.color_scheme.timer_active}
             _ => {self.color_scheme.timer_paused}
-
-
         };
-        let display_string = match self.timer_data.timer_state {
-            TimerState::Started(time_stamp) => {
-                format!("{}", TimerData::as_minutes(&(self.timer_data.get_work_time(&self.settings.work_times_times)-time_stamp.elapsed())))
-            }
-            TimerState::Done => {
-                format!("{}", TimerData::as_minutes(&self.timer_data.get_work_time(&self.settings.work_times_times)))
-            }
-            TimerState::Paused(paused_time) => {
-                format!("{}", TimerData::as_minutes(&(self.timer_data.get_work_time(&self.settings.work_times_times)-paused_time)))
-            }
-        };
-        
-        egui::Frame::none().fill(timer_bg_color)
-                           .inner_margin(Margin::same(0.0))
-                           .outer_margin(Margin::same(0.0))
-                           .rounding(Rounding::same(5.0))
-                           .stroke(egui::Stroke::new(2.0, self.color_scheme.ligth_bg_stroke))
-                           .show(ui, |ui| {
-            ui.add_sized([100.0, 30.0], egui::Label::new(RichText::new(display_string).text_style(TextStyle::Name("Timer".into()))));
-        });
+        let display_string = self.timer_data.calculate_timer_text(&self.settings);
+        ui.add(TimerDisplay::new(timer_bg_color, self.color_scheme.ligth_bg_stroke, display_string));
     } 
     
 
@@ -332,6 +246,43 @@ impl TimerApp {
         self.draw_pause_button_element(ui); 
         self.draw_set_time_buttons_element(ui);
     }
+    pub fn draw_settings_screen<'a>(&mut self, ui: &'a mut Ui){
+        let editable_settings = match &mut self.current_screen {
+            Screen::SettingsScreen { editable_settings } => Some(editable_settings),
+            Screen::TimerScreen => None,
+        }.unwrap(); //We already know screen is settingsScreen, but borrow checker demands we have
+                    //a match statement here.
+        ui.add(egui::TextEdit::singleline(&mut editable_settings[0]));
+        ui.add(egui::TextEdit::singleline(&mut editable_settings[1]));
+        ui.add(egui::TextEdit::singleline(&mut editable_settings[2]));
+    }
+    pub fn validate_work_time_setting(settings: &mut Setting, new_val: &String, work_time_setting: &WorkTimes) {
+        let as_dur = TimerData::minutes_as_dur(new_val);
+        match as_dur {
+            Some(dur) => *settings.work_times_times.get_mut(&work_time_setting).unwrap() = dur,
+            None => (),
+        };
+    }
+    pub fn play_alert(audio_path: &String) {
+        let path_clone = audio_path.clone();
+        thread::spawn( ||{
+            let (_stream, stream_handle) = match rodio::OutputStream::try_default() {
+                Ok((output_stream, stream_handle)) => Some((output_stream, stream_handle)),
+                Err(_) => {return},
+            }.unwrap();
+            //not hanlding errors?? Cringe!
+            let file = BufReader::new(match File::open(path_clone) {
+                Ok(file) => Some(file),
+                Err(_) => {return},
+            }.unwrap());
+            let source = match rodio::Decoder::new(file) {
+                Ok(source) => Some(source),
+                Err(_) => {return},
+            }.unwrap();
+            stream_handle.play_raw(source.convert_samples());
+            thread::sleep(Duration::from_secs(5));
+        });
+    }
 }
 
 
@@ -348,35 +299,74 @@ impl eframe::App for TimerApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        #[cfg(not(target_arch = "wasm32"))] // no File->Quit on web pages!
+        match self.timer_data.timer_state {
+            TimerState::Done => (),
+            TimerState::Paused(_) => (),
+            TimerState::Started(time_stamp) => {
+                let time = TimerData::get_work_time(&self.timer_data.work_time, &self.settings.work_times_times).checked_sub(time_stamp.elapsed());
+                if time == None {
+                    self.timer_data.timer_state = TimerState::Done;
+                    println!("heje");
+                    TimerApp::play_alert(&self.settings.alert_sound_path);
+                    match self.timer_data.work_time {
+                        WorkTimes::Work => {self.timer_data.work_time = WorkTimes::Short},
+                        _ => {self.timer_data.work_time = WorkTimes::Work},
+                    }
+                }
+            }
+
+        }
+
+
+
+         // no File->Quit on web pages!
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             // The top panel is often a good place for a menu bar:
             egui::menu::bar(ui, |ui| {
                 //Size of button is bugged/weird, make a custom menu_button?
+                #[cfg(not(target_arch = "wasm32"))]
                 ui.menu_button("X", |ui| {
                     if ui.add_sized([20.0, 10.0], egui::Button::new(RichText::new("Confirm?").text_style(TextStyle::Name("Small Text".into())))).clicked() {
                         _frame.close();
                  }
                 });
 
-                if ui.add(egui::SelectableLabel::new(self.current_screen == Screen::SettingsScreen, "Settings")).clicked() {
-                    self.current_screen = match self.current_screen {Screen::SettingsScreen => Screen::TimerScreen, Screen::TimerScreen => Screen::SettingsScreen}
+                if ui.add(egui::SelectableLabel::new(self.current_screen != Screen::TimerScreen, "Settings")).clicked() {
+                    match &self.current_screen {
+                        Screen::SettingsScreen{editable_settings} => {
+                            TimerApp::validate_work_time_setting(&mut self.settings, &editable_settings[0], &WorkTimes::Work);
+                            TimerApp::validate_work_time_setting(&mut self.settings, &editable_settings[1], &WorkTimes::Long);
+                            TimerApp::validate_work_time_setting(&mut self.settings, &editable_settings[2], &WorkTimes::Short);
+                            self.current_screen = Screen::TimerScreen
+                        }
+                        Screen::TimerScreen => {
+                            self.current_screen = Screen::SettingsScreen{editable_settings: TimerData::load_editable_settings(& self.settings)}
+                        }
+                    }
                 }
             });
         });
-
+        let cur_screen = self.current_screen.clone();
         egui::CentralPanel::default().show(ctx, |ui| {
-            match self.current_screen {
+            match cur_screen {
                 Screen::TimerScreen => self.draw_timer_screen(ui),
-                Screen::SettingsScreen => ()
+                Screen::SettingsScreen{editable_settings} => {
+                    //We cant use editable_settings in function call directly due to the borrow
+                    //checker 
+                    self.draw_settings_screen(ui);
+                }
             }
         });
 
+        #[cfg(not(target_arch = "wasm32"))]
         if _frame.info().window_info.focused {
             ctx.request_repaint_after(Duration::from_secs(1));
         } else {
             ctx.request_repaint_after(Duration::from_secs(5));
         }
+        #[cfg(target_arch = "wasm32")]
+        ctx.request_repaint_after(Duration::from_secs(1));
+
     }
 
 
