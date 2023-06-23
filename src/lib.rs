@@ -3,7 +3,7 @@
 mod app;
 mod visuals;
 mod custom_widgets;
+mod timer;
 pub use app::TimerApp;
-pub use app::TimerData;
 pub use visuals::AppColorScheme;
-
+pub use timer::{TimerData, TimerState, WorkTimes};

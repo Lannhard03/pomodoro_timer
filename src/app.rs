@@ -11,6 +11,8 @@ use std::io::BufReader;
 use rodio;
 use rodio::source::Source;
 use std::thread;
+use crate::timer::{WorkTimes, TimerData, TimerState};
+
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct TimerApp {
@@ -24,29 +26,6 @@ pub struct TimerApp {
     timer_visuals: TimerAppVisuals,
 }
 
-
-#[derive(serde::Deserialize, serde::Serialize)]
-#[serde(default)]
-pub struct TimerData{
-    #[serde(skip)]
-    timer_state: TimerState,
-    #[serde(skip)]
-    work_time: WorkTimes, 
-}
-
-#[derive(PartialEq, Eq)]
-pub enum TimerState{
-    Started (Instant),
-    Paused (Duration),
-    Done,
-}
-
-#[derive(PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum WorkTimes {
-    Work, 
-    Short, 
-    Long,
-}
 #[derive(PartialEq, Eq, Clone)]
 pub enum Screen {
     TimerScreen,
@@ -56,7 +35,7 @@ pub enum Screen {
 #[derive(PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct Setting{
-    work_times_times: HashMap<WorkTimes, Duration>,  
+    work_times_settings: HashMap<WorkTimes, Duration>,  
     alert_sound_path: String,
 }
 
@@ -64,7 +43,7 @@ pub struct Setting{
 impl Default for Setting{
     fn default() -> Self {
         Setting {
-            work_times_times: HashMap::from([(WorkTimes::Work, Duration::from_secs(25*60)),
+            work_times_settings: HashMap::from([(WorkTimes::Work, Duration::from_secs(25*60)),
                                              (WorkTimes::Short, Duration::from_secs(5*60)),
                                              (WorkTimes::Long, Duration::from_secs(15*60))]),
             alert_sound_path: "assets/alert_sound.wav".into(),
@@ -72,80 +51,12 @@ impl Default for Setting{
     }
 }
 
-
-
-impl Default for TimerData{
-    fn default() -> Self{
-        Self {
-            timer_state: TimerState::Done, 
-            work_time: WorkTimes::Work,
-        }
+impl Setting {
+    pub fn work_time_settings(&self) -> &HashMap<WorkTimes, Duration> {
+        &self.work_times_settings
     }
-    
-}
-impl TimerData{
-    fn dur_as_minutes(dur: &Duration) -> String {
-        let secs = dur.as_secs();
-        let minutes = if secs/60 >= 10 {
-            format!("{}", secs/60)
-        } else if secs/60 > 0 {
-            format!(" {}", secs/60)
-        } else {
-            String::from("00")
-        };
-
-        let secs = if  secs%60 >= 10 {
-            format!("{}", secs%60)
-        } else if secs%60 > 0{
-            format!("0{}", secs%60)
-        } else {
-            String::from("00")
-        };
-
-       format!("{}:{}", minutes, secs)
-    }
-    fn minutes_as_dur(minute: &String) -> Option<Duration> {
-        let minute = minute.trim().clone();
-        let display_digits = minute.split(':');
-        let mut is_numeric = true;
-        let converted_digits: Vec<u64> = display_digits.map(|digit_display| {
-            digit_display.parse::<u64>().unwrap_or_else(|_x| {is_numeric = false; 0})
-        }).collect();
-        if is_numeric {
-            match converted_digits.len() {
-                1 => {return Some(Duration::from_secs(converted_digits[0]));}
-                2 => {return Some(Duration::from_secs(60*converted_digits[0]+converted_digits[1]));}
-                _ => {return None}
-            }
-        } else {
-            return None
-        }
- 
-    }
-    fn get_work_time(work_time: &WorkTimes, work_time_setting: & HashMap<WorkTimes, Duration>) -> Duration {
-        work_time_setting.get(work_time).unwrap_or(& Duration::from_secs(0)).clone()
-    }
-    fn calculate_timer_text(&self, settings: & Setting) -> String {
-        match self.timer_state {
-            TimerState::Started(time_stamp) => {
-                format!("{}", TimerData::dur_as_minutes(&(TimerData::get_work_time(&self.work_time, &settings.work_times_times)
-                                                          .checked_sub(time_stamp.elapsed()).unwrap_or(Duration::from_secs(0)))))
-            }
-            TimerState::Done => {
-                format!("{}", TimerData::dur_as_minutes(&TimerData::get_work_time(&self.work_time, &settings.work_times_times)))
-            }
-            TimerState::Paused(paused_time) => {
-                format!("{}", TimerData::dur_as_minutes(&(TimerData::get_work_time(&self.work_time, &settings.work_times_times)-paused_time)))
-            }
-        }
-    }
-    fn load_editable_settings(settings: &Setting) -> Vec<String> {
-        let worktimes_map = &settings.work_times_times;
-        let mut editable_strings: Vec<String> = Vec::new();
-        editable_strings.push(TimerData::dur_as_minutes(worktimes_map.get(&WorkTimes::Work).unwrap()));
-        editable_strings.push(TimerData::dur_as_minutes(worktimes_map.get(&WorkTimes::Long).unwrap()));
-        editable_strings.push(TimerData::dur_as_minutes(worktimes_map.get(&WorkTimes::Short).unwrap()));
-        editable_strings
+    pub fn alert_sound_setting(&self) -> &String {
+        &self.alert_sound_path
     }
 }
 
@@ -181,7 +92,7 @@ impl TimerApp {
     
 
     fn draw_timer_text_element<'a>(&mut self, ui: &'a mut Ui) {
-        let timer_bg_color = match self.timer_data.timer_state {
+        let timer_bg_color = match self.timer_data.timer_state() {
             TimerState::Started(_) => {self.color_scheme.timer_active}
             _ => {self.color_scheme.timer_paused}
         };
@@ -192,48 +103,47 @@ impl TimerApp {
 
     fn draw_skip_button_element<'a>(&mut self, ui: &'a mut Ui) {
         if ui.add_sized([10.0, 30.0], Button::new(">")).clicked() {
-            match self.timer_data.timer_state {
+            match self.timer_data.timer_state() {
                 TimerState::Done => (),
-                TimerState::Paused(_)|TimerState::Started(_) => {self.timer_data.timer_state = TimerState::Done}
-            }
+                TimerState::Paused(_)|TimerState::Started(_) => {*self.timer_data.timer_state_mut() = TimerState::Done}
+        }
         }
 
     } 
 
     fn draw_pause_button_element<'a>(&mut self, ui: &'a mut Ui) {
-         let button_string = match self.timer_data.timer_state {
+         let button_string = match self.timer_data.timer_state() {
                 TimerState::Paused(_) => "Restart timer",
                 TimerState::Done => "Start Timer",
                 TimerState::Started(_) => "Pause"
             };
         if ui.add_sized([80.0, 10.0], egui::Button::new(button_string)).clicked() {
-            match self.timer_data.timer_state {
-                TimerState::Done => {self.timer_data.timer_state = TimerState::Started(Instant::now())}
-                TimerState::Started(started_time) => {self.timer_data.timer_state = TimerState::Paused(started_time.elapsed())} 
-                TimerState::Paused(paused_time) => {self.timer_data.timer_state = TimerState::Started(Instant::now()-paused_time)}
-                _ => {self.timer_data.timer_state = TimerState::Done}
+            match self.timer_data.timer_state() {
+                TimerState::Done => {*self.timer_data.timer_state_mut() = TimerState::Started(Instant::now())}
+                TimerState::Started(started_time) => {*self.timer_data.timer_state_mut() = TimerState::Paused(started_time.elapsed())} 
+                TimerState::Paused(paused_time) => {*self.timer_data.timer_state_mut() = TimerState::Started(Instant::now()-*paused_time)}
             }
         }
 
     } 
     fn draw_set_time_buttons_element<'a>(&mut self, ui: &'a mut Ui){
        ui.vertical(|ui|{ 
-            let changing_time_allowed = match self.timer_data.timer_state {
+            let changing_time_allowed = match self.timer_data.timer_state() {
                 TimerState::Started(_) => false,
                 _ => true
 
             };
-            if ui.add_enabled(changing_time_allowed, egui::RadioButton::new(self.timer_data.work_time == WorkTimes::Work, "Work")).clicked() {
-                self.timer_data.work_time = WorkTimes::Work; 
-                self.timer_data.timer_state = TimerState::Done;
+            if ui.add_enabled(changing_time_allowed, egui::RadioButton::new(*self.timer_data.work_time_mut() == WorkTimes::Work, "Work")).clicked() {
+                *self.timer_data.work_time_mut() = WorkTimes::Work; 
+                *self.timer_data.timer_state_mut() = TimerState::Done;
             }
-            if ui.add_enabled(changing_time_allowed, egui::RadioButton::new(self.timer_data.work_time == WorkTimes::Short, "Short")).clicked() {
-                self.timer_data.work_time = WorkTimes::Short; 
-                self.timer_data.timer_state = TimerState::Done;
+            if ui.add_enabled(changing_time_allowed, egui::RadioButton::new(*self.timer_data.work_time() == WorkTimes::Short, "Short")).clicked() {
+                *self.timer_data.work_time_mut() = WorkTimes::Short; 
+                *self.timer_data.timer_state_mut() = TimerState::Done;
             }
-            if ui.add_enabled(changing_time_allowed, egui::RadioButton::new(self.timer_data.work_time == WorkTimes::Long, "Long")).clicked() {
-                self.timer_data.work_time = WorkTimes::Long;
-                self.timer_data.timer_state = TimerState::Done;
+            if ui.add_enabled(changing_time_allowed, egui::RadioButton::new(*self.timer_data.work_time() == WorkTimes::Long, "Long")).clicked() {
+                *self.timer_data.work_time_mut() = WorkTimes::Long;
+                *self.timer_data.timer_state_mut() = TimerState::Done;
             }
         });
     }
@@ -259,31 +169,11 @@ impl TimerApp {
     pub fn validate_work_time_setting(settings: &mut Setting, new_val: &String, work_time_setting: &WorkTimes) {
         let as_dur = TimerData::minutes_as_dur(new_val);
         match as_dur {
-            Some(dur) => *settings.work_times_times.get_mut(&work_time_setting).unwrap() = dur,
+            Some(dur) => *settings.work_times_settings.get_mut(&work_time_setting).unwrap() = dur,
             None => (),
         };
     }
-    pub fn play_alert(audio_path: &String) {
-        let path_clone = audio_path.clone();
-        thread::spawn( ||{
-            let (_stream, stream_handle) = match rodio::OutputStream::try_default() {
-                Ok((output_stream, stream_handle)) => Some((output_stream, stream_handle)),
-                Err(_) => {return},
-            }.unwrap();
-            //not hanlding errors?? Cringe!
-            let file = BufReader::new(match File::open(path_clone) {
-                Ok(file) => Some(file),
-                Err(_) => {return},
-            }.unwrap());
-            let source = match rodio::Decoder::new(file) {
-                Ok(source) => Some(source),
-                Err(_) => {return},
-            }.unwrap();
-            stream_handle.play_raw(source.convert_samples());
-            thread::sleep(Duration::from_secs(5));
-        });
     }
-}
 
 
 impl eframe::App for TimerApp {
@@ -299,23 +189,7 @@ impl eframe::App for TimerApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        match self.timer_data.timer_state {
-            TimerState::Done => (),
-            TimerState::Paused(_) => (),
-            TimerState::Started(time_stamp) => {
-                let time = TimerData::get_work_time(&self.timer_data.work_time, &self.settings.work_times_times).checked_sub(time_stamp.elapsed());
-                if time == None {
-                    self.timer_data.timer_state = TimerState::Done;
-                    println!("heje");
-                    TimerApp::play_alert(&self.settings.alert_sound_path);
-                    match self.timer_data.work_time {
-                        WorkTimes::Work => {self.timer_data.work_time = WorkTimes::Short},
-                        _ => {self.timer_data.work_time = WorkTimes::Work},
-                    }
-                }
-            }
-
-        }
+        self.timer_data.update(&self.settings);
 
 
 
